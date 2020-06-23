@@ -1,0 +1,87 @@
+pipeline{
+
+    agent any
+
+    environment{
+        //REPOSITORY PROJECTNAME - SEE CONVENTION FOR CALIBUR:
+        //caliber-assessment
+        //caliber-quality
+        //caliber-config
+        //caliber-category
+        //caliber-batch
+        RegisterFilename = "CHANGEME"
+        //THE NAME OF THE DOCKER ECR REPOSITORY  ====  DO NOT CHANGE ====
+        Register ="367484709954.dkr.ecr.us-east-2.amazonaws.com/${RegisterFilename}"
+        //THE JENKINS CREDENTIAL ID TO MATCH ECR REPOSITORY CREDENTIALS   ====  DO NOT CHANGE ====
+        RegisterCredential ="RevatureECR"
+        dockerImage =""
+        Region ="ecr:us-east-2"
+        ECRRepo ="https://367484709954.dkr.ecr.us-east-2.amazonaws.com"
+
+
+        //CHANGE this service variable depending on what service you're building
+        //CategoryService
+        //AssessmentService
+        //BatchService
+        //config-server
+        //caliber-quality-audit-service
+        Service ="caliber-quality-audit-service"
+    }
+
+    tools{
+        maven 'maven-3'
+    }
+    
+    stages{
+        stage ("initialize") {
+            steps {
+                sh '''
+                echo "PATH = ${PATH}"
+                echo "M2_HOME = ${M2_HOME}"
+                '''
+            }
+        }
+
+        stage('install'){
+            steps{
+                //fixes JDBC driver dependancies prioer to packaging .jar
+                sh 'mvn install:install-file -Dfile="./src/main/resources/ojdbc7.jar" -DgroupId="com.oracle"  -DartifactId=ojdbc7 -Dversion="12.2.0.1" -Dpackaging=jar'
+                sh "mvn clean package -DskipTests=true"
+            }
+        }
+
+        stage('Build the image'){
+            steps{
+                script{
+                    sh 'docker build -t ${Register}:latest --build-arg JAR_FILE=${Service}-0.0.1-SNAPSHOT.jar .'
+                }
+            }
+        }
+
+        stage ('Deploy image to ECR'){
+            steps{
+                script{
+                    docker.withRegistry("${ECRRepo}", "${Region}:${RegisterCredential}") {
+                        sh 'docker push ${Register}:latest'
+                    }
+                }
+            }
+        }
+
+        stage ("Remove unUsed docker image"){
+            steps{
+                sh "docker rmi ${Register}:latest"
+            }
+        }
+    }
+    post {
+      failure {
+          emailext (
+              subject: "FAILED: '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+              body: "JOB '${env.JOB_NAME} [${env.BUILD_NUMBER}]' has failed on '${env.BUILD_TIMESTAMP}'.\nGIT URL: '${env.GIT_URL}'\nGIT BRANCH: '${env.GIT_BRANCH}'\nGIT COMMIT SHA: '${env.GIT_COMMIT}'\nCheck the console output at '${env.BUILD_URL}'.",
+              to: "centerofexcellence@revature.com",
+              attachLog: true
+              )
+      }
+    }
+}
